@@ -17,10 +17,10 @@
 #define IN3_PIN 10 // Motor B Direction 1
 #define IN4_PIN 6  // Motor B Direction 2
 // DRV8833 #2 - Controls Motor C and D
-#define IN5_PIN 1  // Motor C Direction 1
-#define IN6_PIN 12 // Motor C Direction 2
-#define IN7_PIN 18 // Motor D Direction 1
-#define IN8_PIN 19 // Motor D Direction 2
+#define IN5_PIN 12 // Motor C Direction 1
+#define IN6_PIN 18 // Motor C Direction 2
+#define IN7_PIN 19 // Motor D Direction 1
+#define IN8_PIN 13 // Motor D Direction 2
 
 // --- PWM Properties ---
 const int PWM_FREQ = 5000;
@@ -523,7 +523,7 @@ void setup() {
     }
     
     // 初始化雷达串口
-    ld2450Serial.begin(256000, SERIAL_8N1, 16, 17); // RX=16, TX=17
+    ld2450Serial.begin(256000, SERIAL_8N1, 0, 1); // RX=0, TX=1
     Serial.println("LD2450 serial initialized");
     
     // 设置Web服务器
