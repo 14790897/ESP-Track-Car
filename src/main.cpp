@@ -29,7 +29,6 @@ const int MAX_DUTY_CYCLE = (1 << PWM_RESOLUTION) - 1; // 255 for 8-bit
 
 // --- Global Variables ---
 AsyncWebServer server(80);
-const char *mdnsHostname = "esp32car";
 int motorASpeed = 150;
 int motorBSpeed = 150;
 int motorCSpeed = 150;
@@ -393,10 +392,8 @@ void autoTrackTarget() {
 }
 
 // --- Web Server Setup ---
-void setupWebServer() {
-    // 静态文件服务
-    server.serveStatic("/", LittleFS, "/").setDefaultFile("car.html");
-    
+void setupWebServer()
+{
     // 运动控制API
     server.on("/forward", HTTP_GET, [](AsyncWebServerRequest *request) {
         if (!autoTrackingMode) {
@@ -477,7 +474,10 @@ void setupWebServer() {
             request->send(200, "text/plain", autoTrackingMode ? "enabled" : "disabled");
         }
     });
-    
+
+    // 静态文件服务（放在最后，避免拦截API请求）
+    server.serveStatic("/", LittleFS, "/").setDefaultFile("index.html");
+
     server.begin();
     Serial.println("Web server started");
 }
@@ -498,14 +498,15 @@ void setup() {
     
     // 停止所有电机
     motorStop();
-    
     // 初始化LittleFS
     if (!LittleFS.begin()) {
-        Serial.println("LittleFS initialization failed");
-        return;
+        Serial.println("LittleFS initialization failed - using built-in web interface");
     }
-    Serial.println("LittleFS initialized");
-    
+    else
+    {
+        Serial.println("LittleFS initialized");
+    }
+
     // 初始化WiFi
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
     Serial.print("Connecting to WiFi");
@@ -518,12 +519,13 @@ void setup() {
     Serial.println(WiFi.localIP());
     
     // 初始化mDNS
-    if (MDNS.begin(mdnsHostname)) {
-        Serial.printf("mDNS started. Access at: http://%s.local\n", mdnsHostname);
+    if (MDNS.begin(MDNS_HOST_NAME))
+    {
+        Serial.printf("mDNS started. Access at: http://%s.local\n", MDNS_HOST_NAME);
     }
-    
+
     // 初始化雷达串口
-    ld2450Serial.begin(256000, SERIAL_8N1, 0, 1); // RX=0, TX=1
+    ld2450Serial.begin(256000, SERIAL_8N1, 1, 0); // RX=1, TX=0
     Serial.println("LD2450 serial initialized");
     
     // 设置Web服务器
