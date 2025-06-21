@@ -12,6 +12,11 @@
 #include <Update.h>
 #include "secrets.h"
 
+// --- Helper Macros ---
+#ifndef min
+#define min(a, b) ((a) < (b) ? (a) : (b))
+#endif
+
 // --- Pin Definitions ---
 // DRV8833 #1 - Controls Motor A and B
 #define IN1_PIN 2  // Motor A Direction 1
@@ -424,6 +429,10 @@ void autoTrackTarget()
 {
     if (!autoTrackingMode || currentTargetCount == 0)
     {
+        // 在自动跟踪模式下但没有目标时，确保立即停止
+        if (autoTrackingMode && currentTargetCount == 0) {
+            emergencyStop("No targets in autoTrackTarget");
+        }
         return;
     }
 
@@ -433,7 +442,7 @@ void autoTrackTarget()
     static int historyIndex = 0;
     static int validDataCount = 0;
     static unsigned long lastUpdateTime = 0;
-    const unsigned long DATA_COLLECT_INTERVAL = 200; // 200ms收集一次数据
+    const unsigned long DATA_COLLECT_INTERVAL = 100; // 100ms收集一次数据
     const int MIN_DATA_COUNT = 3;                    // 至少需要3次稳定数据才执行动作
 
     // 找到最近的目标
@@ -455,28 +464,28 @@ void autoTrackTarget()
     static unsigned long lastTargetLostTime = 0;
     static bool isSearching = false;
     static int searchDirection = 1; // 1为右转，-1为左转
-    static unsigned long searchStartTime = 0;
-
-    if (nearestTarget == nullptr)
+    static unsigned long searchStartTime = 0;    if (nearestTarget == nullptr)
     {
+        // 目标消失后立即停止所有运动
+        motorStop();
+        
         // 没有找到有效目标的处理策略
         if (lastTargetLostTime == 0)
         {
             lastTargetLostTime = millis();
-            Serial.println("Target lost - Starting search mode");
+            Serial.println("Target lost - Immediate stop activated");
         }
 
         unsigned long timeSinceTargetLost = millis() - lastTargetLostTime;
 
-        if (timeSinceTargetLost < 2000)
+        if (timeSinceTargetLost < 1000)
         {
-            // 前2秒：停止并等待目标重新出现
-            motorStop();
-            Serial.println("Waiting for target to reappear...");
+            // 前1秒：立即停止并等待目标重新出现
+            Serial.println("Target lost - Standing by for target reappearance...");
         }
-        else if (timeSinceTargetLost < 20000)
+        else if (timeSinceTargetLost < 15000)
         {
-            // 2-20秒：开始搜索模式，左右转动寻找目标
+            // 1-15秒：开始搜索模式，左右转动寻找目标
             if (!isSearching)
             {
                 isSearching = true;
@@ -485,8 +494,8 @@ void autoTrackTarget()
                               searchDirection > 0 ? "RIGHT" : "LEFT");
             }
 
-            // 每3秒改变搜索方向
-            if (millis() - searchStartTime > 3000)
+            // 每2.5秒改变搜索方向
+            if (millis() - searchStartTime > 2500)
             {
                 searchDirection *= -1;
                 searchStartTime = millis();
@@ -507,7 +516,7 @@ void autoTrackTarget()
         }
         else
         {
-            // 超过20秒：停止搜索，等待手动干预
+            // 超过15秒：停止搜索，等待手动干预
             motorStop();
             isSearching = false;
             Serial.println("Search timeout - Stopping auto tracking");
@@ -518,11 +527,11 @@ void autoTrackTarget()
         return;
     }
     else
-    {
-        // 找到目标，重置搜索状态
+    {        // 找到目标，重置搜索状态
         if (lastTargetLostTime != 0)
         {
-            Serial.println("Target found - Resuming normal tracking");
+            Serial.printf("Target found after %.1fs - Resuming normal tracking\n", 
+                         (millis() - lastTargetLostTime) / 1000.0);
             lastTargetLostTime = 0;
             isSearching = false;
             // 重置数据收集
@@ -600,86 +609,177 @@ void autoTrackTarget()
         return;
     }
     Serial.printf("Stable tracking: avg_angle=%.1f°, avg_distance=%.2fm (std: %.1f°/%.3fm)\n",
-                  avgAngle, avgDistance, angleStdDev, distanceStdDev);
-
-    // 转向控制变量
+                  avgAngle, avgDistance, angleStdDev, distanceStdDev); // 分段转向控制变量
     static unsigned long lastTurnTime = 0;
     static bool isTurning = false;
-    static unsigned long turnDuration = 0;
+    static bool isPausingForDetection = false;
+    static unsigned long pauseStartTime = 0;
+    static double remainingAngle = 0;
+    static int turnDirection = 0; // 1为右转，-1为左转，0为不转
+
+    const double SEGMENT_ANGLE = 15.0;              // 每次转15度
+    const unsigned long TURN_TIME_PER_DEGREE = 10;  // 每度转向时间10ms
+    const unsigned long DETECTION_PAUSE_TIME = 500; // 检测暂停时间500ms
 
     // 根据滤波后的角度调整方向
     if (abs(avgAngle) > ANGLE_THRESHOLD)
     {
-        // 计算转向时间：角度越大，转向时间越长
-        // 基础转向时间 + 角度比例时间
-        unsigned long baseTurnTime = 200;                                  // 基础转向时间200ms
-        unsigned long angleTurnTime = (unsigned long)(abs(avgAngle) * 10); // 每度10ms
-        unsigned long totalTurnTime = baseTurnTime + angleTurnTime;
-
-        // 限制最大转向时间
-        if (totalTurnTime > 1000)
-            totalTurnTime = 1000; // 最大1秒
-
-        if (!isTurning)
+        if (!isTurning && !isPausingForDetection)
         {
-            // 开始新的转向
+            // 开始新的转向序列
+            remainingAngle = abs(avgAngle);
+            turnDirection = (avgAngle > 0) ? 1 : -1; // 1为右转，-1为左转
+
+            Serial.printf("Starting segmented turn: total_angle=%.1f°, direction=%s\n",
+                          remainingAngle, turnDirection > 0 ? "RIGHT" : "LEFT");
+
+            // 开始第一段转向
+            double currentSegment = min(remainingAngle, SEGMENT_ANGLE);
+            unsigned long turnDuration = (unsigned long)(currentSegment * TURN_TIME_PER_DEGREE);
+
             isTurning = true;
             lastTurnTime = millis();
-            turnDuration = totalTurnTime;
 
-            Serial.printf("Starting turn: angle=%.1f°, duration=%lums\n", avgAngle, turnDuration);
+            Serial.printf("Turning segment: %.1f° for %lums\n", currentSegment, turnDuration);
 
-            if (avgAngle > 0)
+            if (turnDirection > 0)
             {
-                motorRight(); // 目标在右侧，向右转
+                motorRight();
             }
             else
             {
-                motorLeft(); // 目标在左侧，向左转
+                motorLeft();
             }
         }
-        else
+        else if (isTurning)
         {
-            // 检查转向是否完成
-            if (millis() - lastTurnTime >= turnDuration)
+            // 检查当前段转向是否完成
+            double currentSegment = min(remainingAngle, SEGMENT_ANGLE);
+            unsigned long segmentDuration = (unsigned long)(currentSegment * TURN_TIME_PER_DEGREE);
+
+            if (millis() - lastTurnTime >= segmentDuration)
             {
+                // 当前段完成，停止转向并开始检测暂停
                 isTurning = false;
-                motorStop(); // 停止转向
-                Serial.println("Turn completed, stopping");
+                isPausingForDetection = true;
+                pauseStartTime = millis();
+                motorStop();
+
+                remainingAngle -= currentSegment;
+                Serial.printf("Segment completed, remaining angle: %.1f°, pausing for detection\n", remainingAngle);
+
+                // 重置数据收集以获取新的目标位置
+                validDataCount = 0;
+                historyIndex = 0;
                 return;
             }
-            // 转向进行中，继续当前转向动作
-            Serial.printf("Turning... %lums/%lums\n", millis() - lastTurnTime, turnDuration);
+            else
+            {
+                // 继续当前段转向
+                Serial.printf("Turning segment... %lums/%lums\n",
+                              millis() - lastTurnTime, segmentDuration);
+            }
+        }
+        else if (isPausingForDetection)
+        {
+            // 检测暂停期间
+            if (millis() - pauseStartTime >= DETECTION_PAUSE_TIME)
+            {
+                isPausingForDetection = false;
+
+                if (remainingAngle > 5.0) // 如果还有超过5度需要转向
+                {
+                    Serial.printf("Detection pause complete, continuing turn: remaining=%.1f°\n", remainingAngle);
+                    // 不在这里直接开始转向，而是让下一次循环处理
+                }
+                else
+                {
+                    Serial.println("Segmented turn sequence completed");
+                    remainingAngle = 0;
+                    turnDirection = 0;
+                }
+            }
+            else
+            {
+                Serial.printf("Pausing for detection... %lums/%lums\n",
+                              millis() - pauseStartTime, DETECTION_PAUSE_TIME);
+                motorStop(); // 确保在暂停期间停止
+                return;
+            }
         }
     }
     else
     {
-        // 角度在阈值内，停止转向
-        if (isTurning)
+        // 角度在阈值内，停止任何转向操作
+        if (isTurning || isPausingForDetection)
         {
             isTurning = false;
+            isPausingForDetection = false;
+            remainingAngle = 0;
+            turnDirection = 0;
             motorStop();
-            Serial.println("Target centered, stopping turn");
-        }
-        // 根据滤波后的距离控制前进/后退（仅在不转向时执行）
-        if (!isTurning)
+            Serial.println("Target centered, stopping all turn operations");
+        } // 根据滤波后的距离控制前进/后退（仅在不转向且不暂停检测时执行）
+        // 目标：保持50厘米的间距
+        if (!isTurning && !isPausingForDetection)
         {
-            if (avgDistance > 1.0)
+            const double TARGET_DISTANCE = 0.5;    // 目标距离50厘米
+            const double DISTANCE_TOLERANCE = 0.3; // 允许误差30厘米
+
+            double distanceError = avgDistance - TARGET_DISTANCE;
+
+            if (distanceError > DISTANCE_TOLERANCE)
             {
-                motorForward(); // 距离较远，前进
-                Serial.println("Moving forward - target too far");
+                // 距离超过55厘米，需要前进
+                motorForward();
+                Serial.printf("Moving forward - current: %.2fm, target: %.2fm, error: +%.2fm\n",
+                              avgDistance, TARGET_DISTANCE, distanceError);
             }
-            else if (avgDistance < 0.5)
+            else if (distanceError < -DISTANCE_TOLERANCE)
             {
-                motorBackward(); // 距离太近，后退
-                Serial.println("Moving backward - target too close");
+                // 距离小于45厘米，需要后退
+                motorBackward();
+                Serial.printf("Moving backward - current: %.2fm, target: %.2fm, error: %.2fm\n",
+                              avgDistance, TARGET_DISTANCE, distanceError);
             }
             else
             {
-                motorStop(); // 距离合适，停止
-                Serial.println("Distance optimal - stopping");
+                motorStop();
+                Serial.printf("Distance optimal - current: %.2fm, target: %.2fm, maintaining position\n",
+                              avgDistance, TARGET_DISTANCE);
             }
         }
+    }
+}
+
+// --- Safety Functions ---
+void emergencyStop(const char* reason) {
+    motorStop();
+    static unsigned long lastEmergencyReport = 0;
+    if (millis() - lastEmergencyReport > 1000) {  // 限制日志频率
+        Serial.print("EMERGENCY STOP: ");
+        Serial.println(reason);
+        lastEmergencyReport = millis();
+    }
+}
+
+// 检查目标丢失并执行紧急停止
+void checkTargetLossAndStop() {
+    static unsigned long lastTargetTime = 0;
+    static bool hadTarget = false;
+    
+    if (autoTrackingMode) {
+        if (currentTargetCount > 0) {
+            lastTargetTime = millis();
+            hadTarget = true;
+        } else if (hadTarget && (millis() - lastTargetTime > 100)) {
+            // 目标丢失超过100ms，立即停止
+            emergencyStop("Target lost for >100ms");
+            hadTarget = false;
+        }
+    } else {
+        hadTarget = false;
+        lastTargetTime = millis();
     }
 }
 
@@ -754,16 +854,23 @@ void setupWebServer()
 
     // 自动跟踪控制
     server.on("/auto-tracking", HTTP_GET, [](AsyncWebServerRequest *request)
-              {
-        if (request->hasParam("enable")) {
-            autoTrackingMode = request->getParam("enable")->value() == "true";
-            if (!autoTrackingMode) {
-                motorStop();
+              {        if (request->hasParam("enable")) {
+            bool newAutoTrackingMode = request->getParam("enable")->value() == "true";
+            
+            if (newAutoTrackingMode && !autoTrackingMode) {
+                // 启用自动跟踪时重置所有状态
+                Serial.println("Auto tracking enabled - Resetting safety states");
+                motorStop(); // 先停止再开始
+            } else if (!newAutoTrackingMode && autoTrackingMode) {
+                // 禁用自动跟踪时立即停止
+                emergencyStop("Auto tracking manually disabled");
             }
+            
+            autoTrackingMode = newAutoTrackingMode;
             request->send(200, "text/plain", autoTrackingMode ? "Auto tracking enabled" : "Auto tracking disabled");
         } else {
             request->send(200, "text/plain", autoTrackingMode ? "enabled" : "disabled");
-        } });
+        }});
 
     // OTA更新API
     server.on("/update", HTTP_GET, [](AsyncWebServerRequest *request)
@@ -991,13 +1098,15 @@ void setup() {
 
 void loop() {
     // 处理OTA更新请求
-    ArduinoOTA.handle();
-
-    // 读取雷达数据
+    ArduinoOTA.handle();    // 读取雷达数据
     String radarData = readSerialData();
     if (radarData.length() > 0) {
         analysisAreaCoordinate(radarData, currentTargets, currentTargetCount);
         lastDetectionTime = millis();
+          // 如果在自动跟踪模式下且没有检测到目标，立即停止
+        if (autoTrackingMode && currentTargetCount == 0) {
+            emergencyStop("No targets detected in radar data");
+        }
     }
     else
     {
@@ -1011,10 +1120,34 @@ void loop() {
         }
     }
 
-    // 检查数据超时
-    if (millis() - lastDetectionTime > 5000) {
+    // 执行目标丢失检查和紧急停止
+    checkTargetLossAndStop();// 检查数据超时和目标丢失的即时响应
+    static int lastTargetCount = 0;
+    static bool wasTracking = false;
+      if (millis() - lastDetectionTime > 5000) {
         currentTargetCount = 0; // 清空过时的目标数据
+        if (autoTrackingMode) {
+            emergencyStop("Radar data timeout (>5s)");
+        }
     }
+    
+    // 目标丢失的即时响应 - 在自动跟踪模式下
+    if (autoTrackingMode) {        if (currentTargetCount == 0 && lastTargetCount > 0) {
+            // 目标刚刚消失，立即停止
+            emergencyStop("Target count dropped to zero");
+            wasTracking = true;
+        }else if (currentTargetCount > 0 && lastTargetCount == 0 && wasTracking) {
+            // 目标重新出现
+            Serial.println("Target reappeared - Resuming tracking");
+            wasTracking = false;
+        }
+        
+        lastTargetCount = currentTargetCount;
+    } else {
+        wasTracking = false;
+        lastTargetCount = 0;
+    }
+    
     // 执行自动跟踪
     if (autoTrackingMode) {
         autoTrackTarget();
