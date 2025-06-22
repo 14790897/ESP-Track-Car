@@ -980,9 +980,20 @@ void setupWebServer()
 // 初始化OTA
 void initOTA()
 {
+    // 检查WiFi状态
+    if (WiFi.status() != WL_CONNECTED)
+    {
+        Serial.println("OTA Init Failed: WiFi not connected!");
+        return;
+    }
+
     // 设置OTA主机名
     ArduinoOTA.setHostname("ESP32-TrackCar");
     Serial.println("OTA hostname set to: ESP32-TrackCar");
+
+    // 设置OTA端口
+    ArduinoOTA.setPort(3232);
+    Serial.println("OTA port set to: 3232");
 
     // 设置OTA密码（可选）
     // ArduinoOTA.setPassword("your_password_here");
@@ -1002,7 +1013,9 @@ void initOTA()
 
     // OTA结束回调
     ArduinoOTA.onEnd([]()
-                     { Serial.println("\nOTA Update completed successfully!"); });
+                     { 
+        Serial.println("\nOTA Update completed successfully!"); 
+        Serial.println("Rebooting..."); });
 
     // OTA进度回调
     ArduinoOTA.onProgress([](unsigned int progress, unsigned int total)
@@ -1018,26 +1031,38 @@ void initOTA()
                        {
         Serial.printf("OTA Error[%u]: ", error);
         if (error == OTA_AUTH_ERROR) {
-            Serial.println("Auth Failed");
+            Serial.println("Auth Failed - Check password");
         } else if (error == OTA_BEGIN_ERROR) {
-            Serial.println("Begin Failed");
+            Serial.println("Begin Failed - Check available space");
         } else if (error == OTA_CONNECT_ERROR) {
-            Serial.println("Connect Failed");
+            Serial.println("Connect Failed - Check network connection");
         } else if (error == OTA_RECEIVE_ERROR) {
-            Serial.println("Receive Failed");
+            Serial.println("Receive Failed - Check network stability");
         } else if (error == OTA_END_ERROR) {
-            Serial.println("End Failed");
-        } });
+            Serial.println("End Failed - Upload corrupted");
+        }
+        Serial.println("OTA will retry on next upload attempt..."); });
 
-    ArduinoOTA.begin();
-    Serial.println("ArduinoOTA started successfully!");
-    Serial.println("OTA Ready - Listening for updates...");
-    Serial.print("Device IP address: ");
-    Serial.println(WiFi.localIP());
-    Serial.print("Device hostname: ESP32-TrackCar.local");
-    Serial.println();
-    Serial.println("You can now upload via:");
-    Serial.println("1. Arduino IDE -> Tools -> Port -> ESP32-TrackCar");
+    try
+    {
+        ArduinoOTA.begin();
+        Serial.println("✓ ArduinoOTA started successfully!");
+        Serial.println("✓ OTA Ready - Listening for updates...");
+        Serial.print("✓ Device IP address: ");
+        Serial.println(WiFi.localIP());
+        Serial.println("✓ Device hostname: ESP32-TrackCar.local");
+        Serial.println();
+        Serial.println("=== OTA Upload Methods ===");
+        Serial.println("1. PlatformIO: pio run -e airm2m_core_esp32c3_ota -t upload");
+        Serial.println("2. Arduino IDE: Tools -> Port -> ESP32-TrackCar");
+        Serial.println("3. Direct IP: " + WiFi.localIP().toString() + ":3232");
+        Serial.println("==========================");
+    }
+    catch (...)
+    {
+        Serial.println("✗ OTA initialization failed!");
+        Serial.println("  Check WiFi connection and restart device");
+    }
     Serial.println("2. PlatformIO -> airm2m_core_esp32c3_ota environment");
     Serial.printf("3. Web interface -> http://%s/update\n", WiFi.localIP().toString().c_str());
 }
@@ -1065,26 +1090,56 @@ void setup() {
     else
     {
         Serial.println("LittleFS initialized");
-    }
-
-    // 初始化WiFi
+    } // 初始化WiFi
+    WiFi.mode(WIFI_STA); // 设置为STA模式
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
     Serial.print("Connecting to WiFi");
-    while (WiFi.status() != WL_CONNECTED) {
+
+    int wifi_retry = 0;
+    while (WiFi.status() != WL_CONNECTED && wifi_retry < 20)
+    {
         delay(500);
         Serial.print(".");
+        wifi_retry++;
     }
-    Serial.println();
-    Serial.print("WiFi connected! IP: ");
-    Serial.println(WiFi.localIP());
+
+    if (WiFi.status() == WL_CONNECTED)
+    {
+        Serial.println();
+        Serial.print("WiFi connected! IP: ");
+        Serial.println(WiFi.localIP());
+        Serial.print("Signal strength (RSSI): ");
+        Serial.print(WiFi.RSSI());
+        Serial.println(" dBm");
+    }
+    else
+    {
+        Serial.println();
+        Serial.println("WiFi connection failed!");
+        Serial.println("Please check SSID and password in secrets.h");
+    }
+
     // 初始化mDNS
     if (MDNS.begin(MDNS_HOST_NAME))
     {
         Serial.printf("mDNS started. Access at: http://%s.local\n", MDNS_HOST_NAME);
+        MDNS.addService("http", "tcp", 80);      // 添加HTTP服务
+        MDNS.addService("arduino", "tcp", 3232); // 添加OTA服务
+    }
+    else
+    {
+        Serial.println("mDNS initialization failed!");
     }
 
-    // 初始化OTA
-    initOTA();
+    // 只有WiFi连接成功才初始化OTA
+    if (WiFi.status() == WL_CONNECTED)
+    {
+        initOTA();
+    }
+    else
+    {
+        Serial.println("Skipping OTA initialization due to WiFi failure");
+    }
 
     // 初始化雷达串口
     ld2450Serial.begin(256000, SERIAL_8N1, 1, 0); // RX=1, TX=0
@@ -1097,8 +1152,29 @@ void setup() {
 }
 
 void loop() {
-    // 处理OTA更新请求
-    ArduinoOTA.handle();    // 读取雷达数据
+    // WiFi连接监控和重连
+    static unsigned long lastWiFiCheck = 0;
+    if (millis() - lastWiFiCheck > 10000)
+    { // 每10秒检查一次WiFi
+        if (WiFi.status() != WL_CONNECTED)
+        {
+            Serial.println("WiFi disconnected! Attempting to reconnect...");
+            WiFi.reconnect();
+            delay(1000);
+            if (WiFi.status() == WL_CONNECTED)
+            {
+                Serial.print("WiFi reconnected! IP: ");
+                Serial.println(WiFi.localIP());
+            }
+        }
+        lastWiFiCheck = millis();
+    }
+
+    // 处理OTA更新请求 (仅在WiFi连接时)
+    if (WiFi.status() == WL_CONNECTED)
+    {
+        ArduinoOTA.handle();
+    } // 读取雷达数据
     String radarData = readSerialData();
     if (radarData.length() > 0) {
         analysisAreaCoordinate(radarData, currentTargets, currentTargetCount);
