@@ -989,8 +989,9 @@ void initOTA()
     }
 
     // 设置OTA主机名
-    ArduinoOTA.setHostname("ESP32-TrackCar");
-    Serial.println("OTA hostname set to: ESP32-TrackCar");
+    ArduinoOTA.setHostname(MDNS_HOST_NAME);
+
+    Serial.println("OTA hostname set to: " + String(MDNS_HOST_NAME));
 
     // 设置OTA端口
     ArduinoOTA.setPort(3232);
@@ -1044,28 +1045,7 @@ void initOTA()
         }
         Serial.println("OTA will retry on next upload attempt..."); });
 
-    try
-    {
-        ArduinoOTA.begin();
-        Serial.println("✓ ArduinoOTA started successfully!");
-        Serial.println("✓ OTA Ready - Listening for updates...");
-        Serial.print("✓ Device IP address: ");
-        Serial.println(WiFi.localIP());
-        Serial.println("✓ Device hostname: ESP32-TrackCar.local");
-        Serial.println();
-        Serial.println("=== OTA Upload Methods ===");
-        Serial.println("1. PlatformIO: pio run -e airm2m_core_esp32c3_ota -t upload");
-        Serial.println("2. Arduino IDE: Tools -> Port -> ESP32-TrackCar");
-        Serial.println("3. Direct IP: " + WiFi.localIP().toString() + ":3232");
-        Serial.println("==========================");
-    }
-    catch (...)
-    {
-        Serial.println("✗ OTA initialization failed!");
-        Serial.println("  Check WiFi connection and restart device");
-    }
-    Serial.println("2. PlatformIO -> airm2m_core_esp32c3_ota environment");
-    Serial.printf("3. Web interface -> http://%s/update\n", WiFi.localIP().toString().c_str());
+    Serial.printf(" Web interface -> http://%s/update\n", WiFi.localIP().toString().c_str());
 }
 
 void setup() {
@@ -1124,8 +1104,9 @@ void setup() {
     if (MDNS.begin(MDNS_HOST_NAME))
     {
         Serial.printf("mDNS started. Access at: http://%s.local\n", MDNS_HOST_NAME);
-        MDNS.addService("http", "tcp", 80);      // 添加HTTP服务
-        MDNS.addService("arduino", "tcp", 3232); // 添加OTA服务
+        MDNS.addService("http", "tcp", 80);         // 添加HTTP服务
+        MDNS.addService("arduino123", "tcp", 3232); // 添加OTA服务,  名字不能叫ardunio会出错
+        Serial.println("mDNS initialized successfully!");
     }
     else
     {
@@ -1230,8 +1211,8 @@ void loop() {
         autoTrackTarget();
     }
 
-    // 定期输出跟踪数据（每2秒）
-    if (millis() - lastTrackingOutput > 2000)
+    // 定期输出跟踪数据（每5秒）
+    if (millis() - lastTrackingOutput > 5000)
     {
         if (currentTargetCount > 0)
         {
