@@ -200,7 +200,18 @@ void setMotorSpeed(int speed) {
     Serial.print("Global speed set to: ");
     Serial.println(speed);
 }
-
+// --- Safety Functions ---
+void emergencyStop(const char *reason)
+{
+    motorStop();
+    static unsigned long lastEmergencyReport = 0;
+    if (millis() - lastEmergencyReport > 1000)
+    { // 限制日志频率
+        Serial.print("EMERGENCY STOP: ");
+        Serial.println(reason);
+        lastEmergencyReport = millis();
+    }
+}
 // --- Radar Functions ---
 int hexToInt(String hex)
 {
@@ -752,16 +763,6 @@ void autoTrackTarget()
     }
 }
 
-// --- Safety Functions ---
-void emergencyStop(const char* reason) {
-    motorStop();
-    static unsigned long lastEmergencyReport = 0;
-    if (millis() - lastEmergencyReport > 1000) {  // 限制日志频率
-        Serial.print("EMERGENCY STOP: ");
-        Serial.println(reason);
-        lastEmergencyReport = millis();
-    }
-}
 
 // 检查目标丢失并执行紧急停止
 void checkTargetLossAndStop() {
