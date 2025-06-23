@@ -44,6 +44,24 @@ int motorDSpeed = 150;
 // --- Radar Variables ---
 HardwareSerial ld2450Serial(1); // 使用UART1
 
+// 自动追踪状态变量
+enum TrackingState
+{
+    TRACKING_IDLE,          // 空闲状态
+    TRACKING_FORWARD,       // 前进中
+    TRACKING_BACKWARD,      // 后退中
+    TRACKING_TURNING_LEFT,  // 左转中
+    TRACKING_TURNING_RIGHT, // 右转中
+    TRACKING_PAUSING,       // 暂停检测中
+    TRACKING_SEARCHING,     // 搜索目标中
+    TRACKING_STOPPED        // 紧急停止
+};
+
+TrackingState currentTrackingState = TRACKING_IDLE;
+String currentTrackingAction = "待机";
+String trackingStateReason = "系统就绪";
+unsigned long stateStartTime = 0;
+
 struct TagInfoBean {
     double x;
     double y;
@@ -92,6 +110,65 @@ String getContentType(String filename) {
     else if (filename.endsWith(".zip")) return "application/x-zip";
     else if (filename.endsWith(".gz")) return "application/x-gzip";
     return "text/plain";
+}
+
+// 更新追踪状态的函数
+void updateTrackingState(TrackingState newState, String action, String reason)
+{
+    if (currentTrackingState != newState)
+    {
+        currentTrackingState = newState;
+        currentTrackingAction = action;
+        trackingStateReason = reason;
+        stateStartTime = millis();
+
+        if (autoTrackingMode)
+        {
+            Serial.printf("🎯 Tracking State: %s - %s (%s)\n",
+                          action.c_str(), reason.c_str(),
+                          getCurrentStateTime().c_str());
+        }
+    }
+}
+
+// 获取当前状态持续时间
+String getCurrentStateTime()
+{
+    unsigned long duration = millis() - stateStartTime;
+    if (duration < 1000)
+    {
+        return String(duration) + "ms";
+    }
+    else
+    {
+        return String(duration / 1000.0, 1) + "s";
+    }
+}
+
+// 获取状态代码字符串
+String getStateCode(TrackingState state)
+{
+    switch (state)
+    {
+    case TRACKING_IDLE:
+        return "IDLE";
+    case TRACKING_FORWARD:
+        return "FORWARD";
+    case TRACKING_BACKWARD:
+        return "BACKWARD";
+    case TRACKING_TURNING_LEFT:
+        return "TURN_LEFT";
+    case TRACKING_TURNING_RIGHT:
+        return "TURN_RIGHT";
+    case TRACKING_PAUSING:
+        return "PAUSING";
+    case TRACKING_SEARCHING:
+        return "SEARCHING";
+    case TRACKING_STOPPED:
+        return "STOPPED";
+    default:
+        return "UNKNOWN";
+    }
 }
 
 // --- Motor Control Functions ---
@@ -161,6 +238,10 @@ void motorForward() {
     motorC_Forward(motorCSpeed);
     motorD_Forward(motorDSpeed);
     Serial.println("Moving Forward");
+    if (autoTrackingMode)
+    {
+        updateTrackingState(TRACKING_FORWARD, "前进", "向目标移动");
+    }
 }
 
 void motorBackward() {
@@ -169,6 +250,10 @@ void motorBackward() {
     motorC_Backward(motorCSpeed);
     motorD_Backward(motorDSpeed);
     Serial.println("Moving Backward");
+    if (autoTrackingMode)
+    {
+        updateTrackingState(TRACKING_BACKWARD, "后退", "与目标保持距离");
+    }
 }
 
 void motorLeft() {
@@ -177,6 +262,10 @@ void motorLeft() {
     motorB_Backward(motorBSpeed);
     motorD_Backward(motorDSpeed);
     Serial.println("Turning Left");
+    if (autoTrackingMode)
+    {
+        updateTrackingState(TRACKING_TURNING_LEFT, "左转", "调整朝向目标");
+    }
 }
 
 void motorRight() {
@@ -185,6 +274,10 @@ void motorRight() {
     motorB_Forward(motorBSpeed);
     motorD_Forward(motorDSpeed);
     Serial.println("Turning Right");
+    if (autoTrackingMode)
+    {
+        updateTrackingState(TRACKING_TURNING_RIGHT, "右转", "调整朝向目标");
+    }
 }
 
 void motorStop() {
@@ -193,6 +286,10 @@ void motorStop() {
     motorC_Stop();
     motorD_Stop();
     Serial.println("All Motors Stopped");
+    if (autoTrackingMode)
+    {
+        updateTrackingState(TRACKING_IDLE, "停止", "等待指令或检测目标");
+    }
 }
 
 void setMotorSpeed(int speed) {
@@ -209,6 +306,7 @@ void setMotorSpeed(int speed) {
 void emergencyStop(const char *reason)
 {
     motorStop();
+    updateTrackingState(TRACKING_STOPPED, "紧急停止", String(reason));
     static unsigned long lastEmergencyReport = 0;
     if (millis() - lastEmergencyReport > 1000)
     { // 限制日志频率
@@ -489,6 +587,7 @@ void autoTrackTarget()
         if (lastTargetLostTime == 0)
         {
             lastTargetLostTime = millis();
+            updateTrackingState(TRACKING_STOPPED, "目标丢失", "立即停止等待目标");
             Serial.println("Target lost - Immediate stop activated");
         }
 
@@ -497,6 +596,7 @@ void autoTrackTarget()
         if (timeSinceTargetLost < 1000)
         {
             // 前1秒：立即停止并等待目标重新出现
+            updateTrackingState(TRACKING_STOPPED, "等待目标", "目标丢失" + String(timeSinceTargetLost) + "ms");
             Serial.println("Target lost - Standing by for target reappearance...");
         }
         else if (timeSinceTargetLost < 15000)
@@ -506,6 +606,7 @@ void autoTrackTarget()
             {
                 isSearching = true;
                 searchStartTime = millis();
+                updateTrackingState(TRACKING_SEARCHING, "搜索目标", "左右转动寻找目标");
                 Serial.printf("Starting search pattern, direction: %s\n",
                               searchDirection > 0 ? "RIGHT" : "LEFT");
             }
@@ -522,10 +623,12 @@ void autoTrackTarget()
             // 执行搜索转动
             if (searchDirection > 0)
             {
+                updateTrackingState(TRACKING_SEARCHING, "搜索-右转", "寻找丢失的目标");
                 motorRight();
             }
             else
             {
+                updateTrackingState(TRACKING_SEARCHING, "搜索-左转", "寻找丢失的目标");
                 motorLeft();
             }
             Serial.println("Searching for target...");
@@ -535,6 +638,7 @@ void autoTrackTarget()
             // 超过15秒：停止搜索，等待手动干预
             motorStop();
             isSearching = false;
+            updateTrackingState(TRACKING_STOPPED, "搜索超时", "等待手动干预");
             Serial.println("Search timeout - Stopping auto tracking");
             // 可选：自动关闭跟踪模式
             // autoTrackingMode = false;
@@ -641,7 +745,8 @@ void autoTrackTarget()
         {
             // 开始新的转向序列
             remainingAngle = abs(avgAngle);
-            turnDirection = (avgAngle > 0) ? 1 : -1; // 1为右转，-1为左转            Serial.printf("Starting segmented turn: total_angle=%.1f°, direction=%s\n",
+            turnDirection = (avgAngle > 0) ? 1 : -1; // 1为右转，-1为左转
+            Serial.printf("Starting segmented turn: total_angle=%.1f°, direction=%s\n",
                           remainingAngle, turnDirection > 0 ? "RIGHT" : "LEFT");
 
             // 开始第一段转向
@@ -695,6 +800,7 @@ void autoTrackTarget()
         else if (isPausingForDetection)
         {
             // 检测暂停期间
+            updateTrackingState(TRACKING_PAUSING, "暂停检测", "分段转向后检测新目标位置");
             if (millis() - pauseStartTime >= DETECTION_PAUSE_TIME)
             {
                 isPausingForDetection = false;
@@ -709,6 +815,7 @@ void autoTrackTarget()
                     Serial.println("Segmented turn sequence completed");
                     remainingAngle = 0;
                     turnDirection = 0;
+                    updateTrackingState(TRACKING_IDLE, "转向完成", "等待下一步指令");
                 }
             }
             else
@@ -849,7 +956,15 @@ void setupWebServer()
         doc["count"] = currentTargetCount;
         doc["timestamp"] = millis();
         doc["autoTracking"] = autoTrackingMode;
-        
+
+        // 添加自动追踪状态信息
+        JsonObject status = doc["trackingStatus"].to<JsonObject>();
+        status["state"] = (int)currentTrackingState;
+        status["action"] = currentTrackingAction;
+        status["reason"] = trackingStateReason;
+        status["duration"] = getCurrentStateTime();
+        status["stateCode"] = getStateCode(currentTrackingState);
+
         String response;
         serializeJson(doc, response);
         request->send(200, "application/json", response); }); // 自动跟踪控制

@@ -217,10 +217,48 @@
             transition: transform 0.3s;
             box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
         }
-        
-        .toggle-switch.active::before {
+          .toggle-switch.active::before {
             transform: translateX(30px);
         }
+        
+        .tracking-status {
+            background: rgba(102, 126, 234, 0.1);
+            border: 1px solid rgba(102, 126, 234, 0.3);
+            border-radius: 8px;
+            padding: 12px;
+            font-size: 0.85em;
+        }
+        
+        .status-header {
+            font-weight: 600;
+            color: #667eea;
+            margin-bottom: 8px;
+            text-align: center;
+        }
+        
+        .status-item {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 4px;
+        }
+        
+        .status-label {
+            color: #666;
+            font-weight: 500;
+        }
+        
+        .status-value {
+            color: #333;
+            font-weight: 600;
+        }
+        
+        .status-value.action-forward { color: #4CAF50; }
+        .status-value.action-backward { color: #FF9800; }
+        .status-value.action-left { color: #2196F3; }
+        .status-value.action-right { color: #2196F3; }
+        .status-value.action-stop { color: #f44336; }
+        .status-value.action-search { color: #9C27B0; }
+        .status-value.action-pause { color: #FFC107; }
         
         .radar-display {
             background: #1a1a1a;
@@ -332,8 +370,7 @@
                         <div class="speed-value">速度: <span id="speedValue">150</span></div>
                     </div>
                 </div>
-                
-                <div class="control-section">
+                  <div class="control-section">
                     <h3 class="section-title">自动跟踪</h3>
                     <div class="auto-tracking">
                         <span>智能跟踪模式</span>
@@ -341,6 +378,21 @@
                     </div>
                     <div style="margin-top: 10px; font-size: 0.9em; color: #666;">
                         启用后，小车将自动跟踪雷达检测到的目标
+                    </div>
+                    <div class="tracking-status" id="trackingStatus" style="margin-top: 15px;">
+                        <div class="status-header">🎯 跟踪状态</div>
+                        <div class="status-item">
+                            <span class="status-label">当前动作:</span>
+                            <span class="status-value" id="currentAction">待机</span>
+                        </div>
+                        <div class="status-item">
+                            <span class="status-label">状态描述:</span>
+                            <span class="status-value" id="statusReason">系统就绪</span>
+                        </div>
+                        <div class="status-item">
+                            <span class="status-label">持续时间:</span>
+                            <span class="status-value" id="stateDuration">0s</span>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -560,9 +612,7 @@
                 updateCounter = 0;
                 lastUpdateTime = now;
             }
-        }
-
-        // 获取雷达数据
+        }        // 获取雷达数据
         function fetchRadarData() {
             fetch('/radar-data')
                 .then(response => response.json())
@@ -578,6 +628,9 @@
                         toggle.classList.remove('active');
                     }
                     
+                    // 更新追踪状态显示
+                    updateTrackingStatus(data.trackingStatus);
+                    
                     updateTargetDisplay();
                     drawRadar();
                     updateRate();
@@ -587,6 +640,58 @@
                     console.error('Error fetching radar data:', error);
                     updateConnectionStatus(false);
                 });
+        }
+
+        // 更新追踪状态显示
+        function updateTrackingStatus(status) {
+            if (!status) return;
+            
+            const currentAction = document.getElementById('currentAction');
+            const statusReason = document.getElementById('statusReason');
+            const stateDuration = document.getElementById('stateDuration');
+            const trackingStatus = document.getElementById('trackingStatus');
+            
+            if (currentAction) {
+                currentAction.textContent = status.action;
+                // 根据状态码添加颜色类
+                currentAction.className = 'status-value';
+                switch(status.stateCode) {
+                    case 'FORWARD':
+                        currentAction.classList.add('action-forward');
+                        break;
+                    case 'BACKWARD':
+                        currentAction.classList.add('action-backward');
+                        break;
+                    case 'TURN_LEFT':
+                        currentAction.classList.add('action-left');
+                        break;
+                    case 'TURN_RIGHT':
+                        currentAction.classList.add('action-right');
+                        break;
+                    case 'STOPPED':
+                        currentAction.classList.add('action-stop');
+                        break;
+                    case 'SEARCHING':
+                        currentAction.classList.add('action-search');
+                        break;
+                    case 'PAUSING':
+                        currentAction.classList.add('action-pause');
+                        break;
+                }
+            }
+            
+            if (statusReason) {
+                statusReason.textContent = status.reason;
+            }
+            
+            if (stateDuration) {
+                stateDuration.textContent = status.duration;
+            }
+            
+            // 只在自动跟踪模式下显示状态面板
+            if (trackingStatus) {
+                trackingStatus.style.display = autoTrackingEnabled ? 'block' : 'none';
+            }
         }
 
         // 键盘控制
