@@ -72,6 +72,11 @@ const double MIN_DISTANCE = 0.3; // 最小跟踪距离(米)
 const double MAX_DISTANCE = 3.0; // 最大跟踪距离(米)
 const double ANGLE_THRESHOLD = 30.0; // 角度阈值(度)
 
+// Segmented Turn Parameters
+const double SEGMENT_ANGLE = 15.0;              // 每次转15度
+const unsigned long TURN_TIME_PER_DEGREE = 1000;  // 每度转向时间1000ms
+const unsigned long DETECTION_PAUSE_TIME = 800; // 检测暂停时间800ms
+
 // --- Helper Functions ---
 String getContentType(String filename) {
     if (filename.endsWith(".html")) return "text/html";
@@ -618,19 +623,16 @@ void autoTrackTarget()
                       angleStdDev, distanceStdDev);
         motorStop(); // 数据不稳定时停止
         return;
-    }
-    Serial.printf("Stable tracking: avg_angle=%.1f°, avg_distance=%.2fm (std: %.1f°/%.3fm)\n",
-                  avgAngle, avgDistance, angleStdDev, distanceStdDev); // 分段转向控制变量
+    }    Serial.printf("Stable tracking: avg_angle=%.1f°, avg_distance=%.2fm (std: %.1f°/%.3fm)\n",
+                  avgAngle, avgDistance, angleStdDev, distanceStdDev); 
+                  
+    // 分段转向控制变量
     static unsigned long lastTurnTime = 0;
     static bool isTurning = false;
     static bool isPausingForDetection = false;
     static unsigned long pauseStartTime = 0;
     static double remainingAngle = 0;
     static int turnDirection = 0; // 1为右转，-1为左转，0为不转
-
-    const double SEGMENT_ANGLE = 15.0;              // 每次转15度
-    const unsigned long TURN_TIME_PER_DEGREE = 10;  // 每度转向时间10ms
-    const unsigned long DETECTION_PAUSE_TIME = 500; // 检测暂停时间500ms
 
     // 根据滤波后的角度调整方向
     if (abs(avgAngle) > ANGLE_THRESHOLD)
@@ -639,9 +641,7 @@ void autoTrackTarget()
         {
             // 开始新的转向序列
             remainingAngle = abs(avgAngle);
-            turnDirection = (avgAngle > 0) ? 1 : -1; // 1为右转，-1为左转
-
-            Serial.printf("Starting segmented turn: total_angle=%.1f°, direction=%s\n",
+            turnDirection = (avgAngle > 0) ? 1 : -1; // 1为右转，-1为左转            Serial.printf("Starting segmented turn: total_angle=%.1f°, direction=%s\n",
                           remainingAngle, turnDirection > 0 ? "RIGHT" : "LEFT");
 
             // 开始第一段转向
@@ -651,7 +651,8 @@ void autoTrackTarget()
             isTurning = true;
             lastTurnTime = millis();
 
-            Serial.printf("Turning segment: %.1f° for %lums\n", currentSegment, turnDuration);
+            Serial.printf("🔄 Turning segment: %.1f° for %lums (%.1fs)\n", 
+                         currentSegment, turnDuration, turnDuration/1000.0);
 
             if (turnDirection > 0)
             {
