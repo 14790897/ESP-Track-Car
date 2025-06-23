@@ -1112,16 +1112,7 @@ void setup() {
     {
         Serial.println("mDNS initialization failed!");
     }
-
-    // 只有WiFi连接成功才初始化OTA
-    if (WiFi.status() == WL_CONNECTED)
-    {
-        initOTA();
-    }
-    else
-    {
-        Serial.println("Skipping OTA initialization due to WiFi failure");
-    }
+    initOTA();
 
     // 初始化雷达串口
     ld2450Serial.begin(256000, SERIAL_8N1, 1, 0); // RX=1, TX=0
