@@ -851,9 +851,7 @@ void setupWebServer()
         
         String response;
         serializeJson(doc, response);
-        request->send(200, "application/json", response); });
-
-    // 自动跟踪控制
+        request->send(200, "application/json", response); }); // 自动跟踪控制
     server.on("/auto-tracking", HTTP_GET, [](AsyncWebServerRequest *request)
               {        if (request->hasParam("enable")) {
             bool newAutoTrackingMode = request->getParam("enable")->value() == "true";
@@ -872,6 +870,26 @@ void setupWebServer()
         } else {
             request->send(200, "text/plain", autoTrackingMode ? "enabled" : "disabled");
         }});
+
+    // OTA状态和诊断API
+    server.on("/ota-status", HTTP_GET, [](AsyncWebServerRequest *request)
+              {
+        JsonDocument doc;
+        doc["wifi_connected"] = WiFi.status() == WL_CONNECTED;
+        doc["wifi_ip"] = WiFi.localIP().toString();
+        doc["hostname"] = MDNS_HOST_NAME;
+        doc["ota_port"] = 3232;
+        doc["web_ota_url"] = "http://" + WiFi.localIP().toString() + "/update";
+        doc["mdns_ota_url"] = "http://" + String(MDNS_HOST_NAME) + ".local/update";
+        doc["free_heap"] = ESP.getFreeHeap();
+        doc["chip_model"] = ESP.getChipModel();
+        doc["flash_size"] = ESP.getFlashChipSize();
+        doc["sketch_size"] = ESP.getSketchSize();
+        doc["free_sketch_space"] = ESP.getFreeSketchSpace();
+        
+        String response;
+        serializeJson(doc, response);
+        request->send(200, "application/json", response); });
 
     // OTA更新API
     server.on("/update", HTTP_GET, [](AsyncWebServerRequest *request)
@@ -975,7 +993,6 @@ void setupWebServer()
 
     server.serveStatic("/", LittleFS, "/").setDefaultFile("index.html");
     server.begin();
-    Serial.println("Web server started");
 }
 
 // 初始化OTA
@@ -990,14 +1007,13 @@ void initOTA()
 
     // 设置OTA主机名
     ArduinoOTA.setHostname(MDNS_HOST_NAME);
-
     Serial.println("OTA hostname set to: " + String(MDNS_HOST_NAME));
 
     // 设置OTA端口
     ArduinoOTA.setPort(3232);
     Serial.println("OTA port set to: 3232");
 
-    // 设置OTA密码（可选）
+    // 设置OTA密码（可选，建议在生产环境中启用）
     // ArduinoOTA.setPassword("your_password_here");
 
     // OTA开始回调
@@ -1011,20 +1027,25 @@ void initOTA()
         }
         // 停止所有电机，确保安全
         motorStop();
-        Serial.println("Start updating " + type); });
+        autoTrackingMode = false; // 禁用自动跟踪
+        Serial.println("Start updating " + type);
+        Serial.println("Motors stopped for safety during OTA update"); });
 
     // OTA结束回调
     ArduinoOTA.onEnd([]()
                      { 
         Serial.println("\nOTA Update completed successfully!"); 
-        Serial.println("Rebooting..."); });
+        Serial.println("Rebooting in 3 seconds...");
+        delay(3000); });
 
     // OTA进度回调
     ArduinoOTA.onProgress([](unsigned int progress, unsigned int total)
                           { 
         static unsigned long lastPrint = 0;
-        if (millis() - lastPrint > 1000) { // 每秒打印一次进度
-            Serial.printf("OTA Progress: %u%% (%u/%u bytes)\n", (progress / (total / 100)), progress, total);
+        unsigned int percent = (progress / (total / 100));
+        if (millis() - lastPrint > 1000 || percent == 100)
+        { // 每秒打印一次进度或完成时
+            Serial.printf("OTA Progress: %u%% (%u/%u bytes)\n", percent, progress, total);
             lastPrint = millis();
         } });
 
@@ -1035,17 +1056,23 @@ void initOTA()
         if (error == OTA_AUTH_ERROR) {
             Serial.println("Auth Failed - Check password");
         } else if (error == OTA_BEGIN_ERROR) {
-            Serial.println("Begin Failed - Check available space");
+            Serial.println("Begin Failed - Check available space or partition table");
         } else if (error == OTA_CONNECT_ERROR) {
             Serial.println("Connect Failed - Check network connection");
         } else if (error == OTA_RECEIVE_ERROR) {
             Serial.println("Receive Failed - Check network stability");
         } else if (error == OTA_END_ERROR) {
-            Serial.println("End Failed - Upload corrupted");
+            Serial.println("End Failed - Upload corrupted or verification failed");
         }
-        Serial.println("OTA will retry on next upload attempt..."); });
+        Serial.println("OTA will retry on next upload attempt...");
+        Serial.println("Device continuing normal operation..."); });
 
-    Serial.printf(" Web interface -> http://%s/update\n", WiFi.localIP().toString().c_str());
+    // 开始OTA服务
+    ArduinoOTA.begin();
+    Serial.println("ArduinoOTA service started successfully!");
+    Serial.printf("Network OTA: ESP32 IDE -> Tools -> Port -> Network -> %s\n", MDNS_HOST_NAME);
+    Serial.printf("Web interface: http://%s/update\n", WiFi.localIP().toString().c_str());
+    Serial.printf("Web interface (mDNS): http://%s.local/update\n", MDNS_HOST_NAME);
 }
 
 void setup() {
@@ -1073,6 +1100,37 @@ void setup() {
         Serial.println("LittleFS initialized");
     } // 初始化WiFi
     WiFi.mode(WIFI_STA); // 设置为STA模式
+
+    // 配置静态IP（如果启用）
+    if (USE_STATIC_IP)
+    {
+        IPAddress local_IP;
+        IPAddress gateway;
+        IPAddress subnet;
+        IPAddress primaryDNS;
+
+        local_IP.fromString(STATIC_IP);
+        gateway.fromString(GATEWAY_IP);
+        subnet.fromString(SUBNET_MASK);
+        primaryDNS.fromString(DNS_SERVER);
+
+        if (!WiFi.config(local_IP, gateway, subnet, primaryDNS))
+        {
+            Serial.println("Static IP configuration failed!");
+        }
+        else
+        {
+            Serial.printf("Static IP configured: %s\n", STATIC_IP);
+            Serial.printf("Gateway: %s\n", GATEWAY_IP);
+            Serial.printf("Subnet: %s\n", SUBNET_MASK);
+            Serial.printf("DNS: %s\n", DNS_SERVER);
+        }
+    }
+    else
+    {
+        Serial.println("Using DHCP for IP assignment");
+    }
+
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
     Serial.print("Connecting to WiFi");
 
@@ -1089,6 +1147,12 @@ void setup() {
         Serial.println();
         Serial.print("WiFi connected! IP: ");
         Serial.println(WiFi.localIP());
+        Serial.print("Gateway: ");
+        Serial.println(WiFi.gatewayIP());
+        Serial.print("Subnet: ");
+        Serial.println(WiFi.subnetMask());
+        Serial.print("DNS: ");
+        Serial.println(WiFi.dnsIP());
         Serial.print("Signal strength (RSSI): ");
         Serial.print(WiFi.RSSI());
         Serial.println(" dBm");
@@ -1098,6 +1162,10 @@ void setup() {
         Serial.println();
         Serial.println("WiFi connection failed!");
         Serial.println("Please check SSID and password in secrets.h");
+        if (USE_STATIC_IP)
+        {
+            Serial.println("Also check static IP configuration - make sure IP is not in use");
+        }
     }
 
     // 初始化mDNS
@@ -1120,8 +1188,6 @@ void setup() {
     
     // 设置Web服务器
     setupWebServer();
-    
-    Serial.println("System ready!");
 }
 
 void loop() {
@@ -1223,7 +1289,6 @@ void loop() {
                 Serial.println("==================");
             }
         }
-
         lastTrackingOutput = millis();
     }
 
@@ -1234,6 +1299,8 @@ void loop() {
             WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected",
             currentTargetCount,
             autoTrackingMode ? "ON" : "OFF");
+        Serial.printf("OTA Services: Network OTA Ready, Web OTA: http://%s/update\n",
+                      WiFi.localIP().toString().c_str());
         lastHeartbeat = millis();
     }
 
