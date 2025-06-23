@@ -28,7 +28,7 @@
 #define IN6_PIN 18 // Motor C Direction 2
 #define IN7_PIN 19 // Motor D Direction 1
 #define IN8_PIN 13 // Motor D Direction 2
-
+bool enableRadarLogOutput = false; // 是否启用雷达日志输出
 // --- PWM Properties ---
 const int PWM_FREQ = 5000;
 const int PWM_RESOLUTION = 8;
@@ -1157,17 +1157,6 @@ void loop() {
             emergencyStop("No targets detected in radar data");
         }
     }
-    else
-    {
-        // 每5秒输出一次无数据的状态
-        static unsigned long lastNoDataReport = 0;
-        if (millis() - lastNoDataReport > 5000)
-        {
-            Serial.println("No radar data received");
-            Serial.printf("Serial available: %d bytes\n", ld2450Serial.available());
-            lastNoDataReport = millis();
-        }
-    }
 
     // 执行目标丢失检查和紧急停止
     checkTargetLossAndStop();// 检查数据超时和目标丢失的即时响应
@@ -1181,11 +1170,12 @@ void loop() {
     }
     
     // 目标丢失的即时响应 - 在自动跟踪模式下
-    if (autoTrackingMode) {        if (currentTargetCount == 0 && lastTargetCount > 0) {
+    if (autoTrackingMode) {
+        if (currentTargetCount == 0 && lastTargetCount > 0) {
             // 目标刚刚消失，立即停止
             emergencyStop("Target count dropped to zero");
             wasTracking = true;
-        }else if (currentTargetCount > 0 && lastTargetCount == 0 && wasTracking) {
+        } else if (currentTargetCount > 0 && lastTargetCount == 0 && wasTracking) {
             // 目标重新出现
             Serial.println("Target reappeared - Resuming tracking");
             wasTracking = false;
@@ -1205,39 +1195,35 @@ void loop() {
     // 定期输出跟踪数据（每5秒）
     if (millis() - lastTrackingOutput > 5000)
     {
-        if (currentTargetCount > 0)
-        {
-            Serial.println("=== 跟踪数据报告 ===");
-            Serial.printf("检测到目标数量: %d\n", currentTargetCount);
-            for (int i = 0; i < currentTargetCount; i++)
+        if(enableRadarLogOutput) {
+            if (currentTargetCount > 0)
             {
-                Serial.printf("目标 %d:\n", i + 1);
-                Serial.printf("  坐标: X=%.1fmm, Y=%.1fmm\n", currentTargets[i].x, currentTargets[i].y);
-                Serial.printf("  距离: %.2fm\n", currentTargets[i].distance);
-                Serial.printf("  角度: %.1f°\n", currentTargets[i].angle);
-                Serial.printf("  速度: %.1fcm/s\n", currentTargets[i].speed);
-                Serial.printf("  分辨率: %.0fmm\n", currentTargets[i].resolution);
-                Serial.printf("  检测时间: %lums前\n", millis() - currentTargets[i].timestamp);
-            }
-            if (autoTrackingMode)
-            {
-                Serial.printf("自动跟踪模式: 开启\n");
+                Serial.println("=== 跟踪数据报告 ===");
+                Serial.printf("检测到目标数量: %d\n", currentTargetCount);
+                for (int i = 0; i < currentTargetCount; i++)
+                {
+                    Serial.printf("目标 %d:\n", i + 1);
+                    Serial.printf("  坐标: X=%.1fmm, Y=%.1fmm\n", currentTargets[i].x, currentTargets[i].y);
+                    Serial.printf("  距离: %.2fm\n", currentTargets[i].distance);
+                    Serial.printf("  角度: %.1f°\n", currentTargets[i].angle);
+                    Serial.printf("  速度: %.1fcm/s\n", currentTargets[i].speed);
+                    Serial.printf("  分辨率: %.0fmm\n", currentTargets[i].resolution);
+                    Serial.printf("  检测时间: %lums前\n", millis() - currentTargets[i].timestamp);
+                }
+
+                Serial.println("==================");
             }
             else
             {
-                Serial.printf("自动跟踪模式: 关闭\n");
+                Serial.println("=== 跟踪数据报告 ===");
+                Serial.println("当前无目标检测");
+                Serial.printf("原始雷达数据: %s\n", radarData.c_str());
+                Serial.printf("自动跟踪模式: %s\n", autoTrackingMode ? "开启" : "关闭");
+                Serial.printf("上次检测时间: %lums前\n", millis() - lastDetectionTime);
+                Serial.println("==================");
             }
-            Serial.println("==================");
         }
-        else
-        {
-            Serial.println("=== 跟踪数据报告 ===");
-            Serial.println("当前无目标检测");
-            Serial.printf("原始雷达数据: %s\n", radarData.c_str());
-            Serial.printf("自动跟踪模式: %s\n", autoTrackingMode ? "开启" : "关闭");
-            Serial.printf("上次检测时间: %lums前\n", millis() - lastDetectionTime);
-            Serial.println("==================");
-        }
+
         lastTrackingOutput = millis();
     }
 
